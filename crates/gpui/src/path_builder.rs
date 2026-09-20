@@ -92,6 +92,21 @@ impl PathBuilder {
         }
     }
 
+    /// Creates a new [`PathBuilder`] to build a Stroke path with round caps
+    /// and round joins. lyon defaults to Butt/Miter; rounded strokes match
+    /// UI elements drawn with circular dots (lane curves, arrowheads).
+    pub fn stroke_rounded(width: Pixels) -> Self {
+        Self {
+            style: PathStyle::Stroke(
+                StrokeOptions::default()
+                    .with_line_width(width.0)
+                    .with_line_cap(lyon::tessellation::LineCap::Round)
+                    .with_line_join(lyon::tessellation::LineJoin::Round),
+            ),
+            ..Self::default()
+        }
+    }
+
     /// Creates a new [`PathBuilder`] to build a Fill path.
     pub fn fill() -> Self {
         Self::default()
