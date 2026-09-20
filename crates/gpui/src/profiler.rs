@@ -16,6 +16,11 @@ use std::{
     time::Duration,
 };
 
+/// No-op stand-in for `std::hint::cold_path`, which was reverted from stable
+/// to unstable in current Rust releases (tracking issue rust-lang/rust#136873).
+#[inline(always)]
+pub(crate) fn cold_path() {}
+
 mod actions;
 #[cfg(feature = "profiler")]
 pub mod hang;
@@ -470,7 +475,7 @@ impl TaskStatistics {
     fn add_yield_timing(&mut self, task: TaskTiming) {
         let yielded_after = task.poll_duration();
         if yielded_after >= self.poll_time_to_beat {
-            std::hint::cold_path(); // most tasks are not the worst, optimize for that
+            cold_path(); // most tasks are not the worst, optimize for that
             let to_replace = self
                 .longest_poll_times
                 .iter()
@@ -491,7 +496,7 @@ impl TaskStatistics {
     fn add_runtime(&mut self, task: TaskTiming) {
         let runtime = task.since_spawn();
         if runtime >= self.runtime_to_beat {
-            std::hint::cold_path(); // most tasks are not the worst, optimize for that
+            cold_path(); // most tasks are not the worst, optimize for that
             let to_replace = self
                 .longest_runtimes
                 .iter()
@@ -611,7 +616,7 @@ impl ThreadTimings {
         self.stats.add_runtime(timing);
 
         if trace_enabled() {
-            std::hint::cold_path(); // optimize for when the profiling is off
+            cold_path(); // optimize for when the profiling is off
             if self.timings.len() >= MAX_TASK_TIMINGS {
                 self.timings.pop_front();
             }
@@ -1209,7 +1214,7 @@ pub fn record_frame_event(event: FrameEvent) {
     if !trace_enabled() {
         return;
     }
-    std::hint::cold_path(); // optimize for when profiling is off
+    cold_path(); // optimize for when profiling is off
 
     let mut frames = FRAME_TIMINGS.lock();
     if frames.timings.len() >= MAX_FRAME_TIMINGS {
