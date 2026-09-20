@@ -13,6 +13,7 @@ use std::{
     iter::Peekable,
     ops::{Add, Range, Sub},
     slice,
+    sync::Arc,
 };
 
 #[allow(non_camel_case_types, unused)]
@@ -791,7 +792,10 @@ pub struct Path<P: Clone + Debug + Default + PartialEq> {
     pub order: DrawOrder,
     pub bounds: Bounds<P>,
     pub content_mask: ContentMask<P>,
-    pub vertices: Vec<PathVertex<P>>,
+    /// Shared vertex storage: cloning a `Path` (which the immediate-mode scene
+    /// does 2-3× per painted path per frame) bumps a refcount instead of
+    /// memcpying the whole tessellation.
+    pub vertices: Arc<Vec<PathVertex<P>>>,
     pub color: Background,
     /// Translation applied to `vertices` at render time without copying them.
     /// `bounds` always includes this offset, `vertices` alone do not; keep the
@@ -808,7 +812,7 @@ impl Path<Pixels> {
         Self {
             id: PathId(0),
             order: DrawOrder::default(),
-            vertices: Vec::new(),
+            vertices: Arc::new(Vec::new()),
             start,
             current: start,
             bounds: Bounds {
@@ -829,11 +833,12 @@ impl Path<Pixels> {
             order: self.order,
             bounds: self.bounds.scale(factor),
             content_mask: self.content_mask.scale(factor),
-            vertices: self
-                .vertices
-                .iter()
-                .map(|vertex| vertex.scale(factor))
-                .collect(),
+            vertices: Arc::new(
+                self.vertices
+                    .iter()
+                    .map(|vertex| vertex.scale(factor))
+                    .collect(),
+            ),
             start: self.start.map(|start| start.scale(factor)),
             current: self.current.scale(factor),
             contour_count: self.contour_count,
@@ -899,20 +904,20 @@ impl Path<Pixels> {
                 size: Default::default(),
             });
 
-        self.vertices.push(PathVertex {
+        // Unique during `PathBuilder` construction, so `make_mut` never copies;
+        // it only pays a refcount check per triangle.
+        let vertices = Arc::make_mut(&mut self.vertices);
+        vertices.push(PathVertex {
             xy_position: xy.0,
             st_position: st.0,
-            content_mask: Default::default(),
         });
-        self.vertices.push(PathVertex {
+        vertices.push(PathVertex {
             xy_position: xy.1,
             st_position: st.1,
-            content_mask: Default::default(),
         });
-        self.vertices.push(PathVertex {
+        vertices.push(PathVertex {
             xy_position: xy.2,
             st_position: st.2,
-            content_mask: Default::default(),
         });
     }
 }
@@ -934,13 +939,12 @@ impl From<Path<ScaledPixels>> for Primitive {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C)]
 #[expect(missing_docs)]
 pub struct PathVertex<P: Clone + Debug + Default + PartialEq> {
     pub xy_position: Point<P>,
     pub st_position: Point<f32>,
-    pub content_mask: ContentMask<P>,
 }
 
 #[expect(missing_docs)]
@@ -949,7 +953,6 @@ impl PathVertex<Pixels> {
         PathVertex {
             xy_position: self.xy_position.scale(factor),
             st_position: self.st_position,
-            content_mask: self.content_mask.scale(factor),
         }
     }
 }

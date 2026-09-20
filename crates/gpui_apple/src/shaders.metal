@@ -821,7 +821,8 @@ vertex PathSpriteVertexOutput path_sprite_vertex(
   uint sprite_id [[instance_id]],
   constant float2 *unit_vertices [[buffer(SpriteInputIndex_Vertices)]],
   constant PathSprite *sprites [[buffer(SpriteInputIndex_Sprites)]],
-  constant Size_DevicePixels *viewport_size [[buffer(SpriteInputIndex_ViewportSize)]]
+  constant Size_DevicePixels *viewport_size [[buffer(SpriteInputIndex_ViewportSize)]],
+  constant PathSpriteTextureMapping *intermediate_mapping [[buffer(SpriteInputIndex_IntermediateMapping)]]
 ) {
   float2 unit_vertex = unit_vertices[unit_vertex_id];
   PathSprite sprite = sprites[sprite_id];
@@ -831,7 +832,14 @@ vertex PathSpriteVertexOutput path_sprite_vertex(
       to_device_position(unit_vertex, sprite.bounds, viewport_size);
 
   float2 screen_position = float2(sprite.bounds.origin.x, sprite.bounds.origin.y) + unit_vertex * float2(sprite.bounds.size.width, sprite.bounds.size.height);
-  float2 texture_coords = screen_position / float2(viewport_size->width, viewport_size->height);
+  // The intermediate texture only holds the pass region (see
+  // path_pass_region), so texture coordinates are relative to the region's
+  // screen origin and size rather than the viewport.
+  float2 texture_coords =
+      (screen_position -
+       float2(intermediate_mapping->origin.x, intermediate_mapping->origin.y)) /
+      float2(intermediate_mapping->texture_size.width,
+             intermediate_mapping->texture_size.height);
 
   return PathSpriteVertexOutput{
     device_position,

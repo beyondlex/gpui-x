@@ -137,6 +137,8 @@ pub struct MetalRenderer {
     core_video_texture_cache: core_video::metal_texture_cache::CVMetalTextureCache,
     path_intermediate_texture: Option<metal::Texture>,
     path_intermediate_msaa_texture: Option<metal::Texture>,
+    /// Current size of `path_intermediate_texture`; zero when unallocated.
+    path_intermediate_size: Size<DevicePixels>,
     path_sample_count: u32,
     /// Offscreen render target reused across `render_scene` calls when
     /// rendering headlessly without reading pixels back.
@@ -361,6 +363,7 @@ impl MetalRenderer {
             core_video_texture_cache,
             path_intermediate_texture: None,
             path_intermediate_msaa_texture: None,
+            path_intermediate_size: size(DevicePixels(0), DevicePixels(0)),
             path_sample_count,
             #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
             headless_render_target: None,
@@ -402,22 +405,27 @@ impl MetalRenderer {
                 ];
             }
         }
-        self.update_path_intermediate_textures(size);
+        // The path intermediate texture is no longer viewport-sized; it is
+        // grown/shrunk per frame from the union of the drawn paths' bounds
+        // (see `ensure_path_intermediate_textures`).
     }
 
-    fn update_path_intermediate_textures(&mut self, size: Size<DevicePixels>) {
+    /// Recreates the path intermediate textures at exactly `size` device
+    /// pixels.
+    fn recreate_path_intermediate_textures(&mut self, texture_size: Size<DevicePixels>) {
         // We are uncertain when this happens, but sometimes size can be 0 here. Most likely before
         // the layout pass on window creation. Zero-sized texture creation causes SIGABRT.
         // https://github.com/zed-industries/zed/issues/36229
-        if size.width.0 <= 0 || size.height.0 <= 0 {
+        if texture_size.width.0 <= 0 || texture_size.height.0 <= 0 {
             self.path_intermediate_texture = None;
             self.path_intermediate_msaa_texture = None;
+            self.path_intermediate_size = size(DevicePixels(0), DevicePixels(0));
             return;
         }
 
         let texture_descriptor = metal::TextureDescriptor::new();
-        texture_descriptor.set_width(size.width.0 as u64);
-        texture_descriptor.set_height(size.height.0 as u64);
+        texture_descriptor.set_width(texture_size.width.0 as u64);
+        texture_descriptor.set_height(texture_size.height.0 as u64);
         texture_descriptor.set_pixel_format(metal::MTLPixelFormat::BGRA8Unorm);
         texture_descriptor.set_storage_mode(metal::MTLStorageMode::Private);
         texture_descriptor
@@ -441,6 +449,37 @@ impl MetalRenderer {
         } else {
             self.path_intermediate_msaa_texture = None;
         }
+        self.path_intermediate_size = texture_size;
+    }
+
+    /// Sizes the path intermediate texture to the smallest 128px-aligned
+    /// bucket that fits `needed`.
+    ///
+    /// The full-viewport intermediate texture made every path pass pay a
+    /// viewport-sized MSAA clear + resolve, even when the paths (diff gutter
+    /// ribbons, lane curves) cover a narrow strip. Bucketing avoids
+    /// reallocating on every frame the union drifts by a pixel; shrinking
+    /// when a bucket wastes ≥2× keeps one full-screen path from pinning a
+    /// full-screen texture forever.
+    fn ensure_path_intermediate_textures(&mut self, needed: Size<DevicePixels>) {
+        const BUCKET: i32 = 128;
+        if needed.width.0 <= 0 || needed.height.0 <= 0 {
+            self.path_intermediate_texture = None;
+            self.path_intermediate_msaa_texture = None;
+            self.path_intermediate_size = size(DevicePixels(0), DevicePixels(0));
+            return;
+        }
+        let bucket = |v: i32| (v + BUCKET - 1) / BUCKET * BUCKET;
+        let need_w = bucket(needed.width.0);
+        let need_h = bucket(needed.height.0);
+        let current = &self.path_intermediate_size;
+        let fits = current.width.0 >= need_w && current.height.0 >= need_h;
+        let wasteful =
+            current.width.0 >= need_w.saturating_mul(2) || current.height.0 >= need_h.saturating_mul(2);
+        if self.path_intermediate_texture.is_some() && fits && !wasteful {
+            return;
+        }
+        self.recreate_path_intermediate_textures(size(DevicePixels(need_w), DevicePixels(need_h)));
     }
 
     pub fn update_transparency(&mut self, transparent: bool) {
@@ -588,9 +627,6 @@ impl MetalRenderer {
         // Headless callers do not have a Cocoa event-loop pool to release
         // autoreleased command buffers and render-pass descriptors.
         objc2::rc::autoreleasepool(|_| {
-            // Update path intermediate textures for this size
-            self.update_path_intermediate_textures(size);
-
             // Create an offscreen texture as render target
             let texture_descriptor = metal::TextureDescriptor::new();
             texture_descriptor.set_width(size.width.0 as u64);
@@ -635,8 +671,6 @@ impl MetalRenderer {
         }
 
         objc2::rc::autoreleasepool(|_| {
-            self.update_path_intermediate_textures(size);
-
             let needs_new_target = self.headless_render_target.as_ref().is_none_or(|texture| {
                 texture.width() != size.width.0 as u64 || texture.height() != size.height.0 as u64
             });
@@ -699,8 +733,7 @@ impl MetalRenderer {
                 PrimitiveBatch::Paths(range) => {
                     // Adjacent path batches have no other primitives between them,
                     // and premultiplied-over compositing is associative, so they can
-                    // share one intermediate pass: one full-viewport clear instead of
-                    // one per batch.
+                    // share one intermediate pass: one clear instead of one per batch.
                     command_encoder.end_encoding();
 
                     let mut paths_end = range.end;
@@ -711,12 +744,20 @@ impl MetalRenderer {
                     }
 
                     let paths = &scene.paths[range.start..paths_end];
-                    let did_draw = self.draw_paths_to_intermediate(
-                        paths,
-                        writer,
-                        viewport_size,
-                        command_buffer,
-                    )?;
+                    // Size the intermediate pass to the paths' extent, not the
+                    // viewport: the MSAA clear + resolve then costs pixels the
+                    // paths can actually cover (a diff gutter strip instead of
+                    // the whole window).
+                    let region = path_pass_region(paths, viewport_size);
+                    let did_draw = if let Some(region) = region {
+                        self.ensure_path_intermediate_textures(size(
+                            DevicePixels(region.size.width.0 as i32),
+                            DevicePixels(region.size.height.0 as i32),
+                        ));
+                        self.draw_paths_to_intermediate(paths, region, writer, command_buffer)?
+                    } else {
+                        false
+                    };
 
                     command_encoder = new_command_encoder_for_texture(
                         command_buffer,
@@ -726,8 +767,11 @@ impl MetalRenderer {
                     );
 
                     if did_draw {
+                        let region =
+                            region.expect("region present when did_draw was returned");
                         if let Err(error) = self.draw_paths_from_intermediate(
                             paths,
+                            region,
                             writer,
                             viewport_size,
                             command_encoder,
@@ -784,8 +828,8 @@ impl MetalRenderer {
     fn draw_paths_to_intermediate(
         &self,
         paths: &[Path<ScaledPixels>],
+        region: Bounds<ScaledPixels>,
         writer: &mut InstanceBufferWriter,
-        viewport_size: Size<DevicePixels>,
         command_buffer: &metal::CommandBufferRef,
     ) -> Result<bool> {
         if paths.is_empty() {
@@ -796,16 +840,27 @@ impl MetalRenderer {
             .as_ref()
             .context("missing path intermediate texture")?;
 
+        // The pass renders into a region-sized texture with the region's
+        // viewport transform, so both the geometry and the per-vertex clip
+        // bounds shift by the region origin. Clip distances and gradient
+        // positioning are relative to the bounds, so shifting both keeps them
+        // consistent (and whole-pixel shifts never move MSAA sample coverage).
         let mut vertices = Vec::with_capacity(paths.iter().map(|path| path.vertices.len()).sum());
         for path in paths {
+            let clipped_bounds = path.bounds.intersect(&path.content_mask.bounds) - region.origin;
             vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
-                xy_position: v.xy_position + path.origin,
+                xy_position: v.xy_position + path.origin - region.origin,
                 st_position: v.st_position,
                 color: path.color,
-                bounds: path.bounds.intersect(&path.content_mask.bounds),
+                bounds: clipped_bounds,
             }));
         }
         let vertex_instance_bindings = writer.write(&vertices)?;
+
+        let region_size = size(
+            DevicePixels(region.size.width.0 as i32),
+            DevicePixels(region.size.height.0 as i32),
+        );
 
         let render_pass_descriptor = metal::RenderPassDescriptor::new();
         let color_attachment = render_pass_descriptor
@@ -825,6 +880,18 @@ impl MetalRenderer {
         }
 
         let command_encoder = command_buffer.new_render_command_encoder(render_pass_descriptor);
+        // NDC is computed against the region size, but the attachment is the
+        // (bucketed, usually larger) intermediate texture: without an explicit
+        // viewport the default full-texture viewport would stretch the content
+        // over the whole texture.
+        command_encoder.set_viewport(metal::MTLViewport {
+            originX: 0.0,
+            originY: 0.0,
+            width: region_size.width.0 as f64,
+            height: region_size.height.0 as f64,
+            znear: 0.0,
+            zfar: 1.0,
+        });
         command_encoder.set_render_pipeline_state(&self.paths_rasterization_pipeline_state);
         command_encoder.set_vertex_buffer(
             PathRasterizationInputIndex::Vertices as u64,
@@ -833,8 +900,8 @@ impl MetalRenderer {
         );
         command_encoder.set_vertex_bytes(
             PathRasterizationInputIndex::ViewportSize as u64,
-            mem::size_of_val(&viewport_size) as u64,
-            &viewport_size as *const Size<DevicePixels> as *const _,
+            mem::size_of_val(&region_size) as u64,
+            &region_size as *const Size<DevicePixels> as *const _,
         );
         command_encoder.set_fragment_buffer(
             PathRasterizationInputIndex::Vertices as u64,
@@ -938,6 +1005,7 @@ impl MetalRenderer {
     fn draw_paths_from_intermediate(
         &self,
         paths: &[Path<ScaledPixels>],
+        region: Bounds<ScaledPixels>,
         writer: &mut InstanceBufferWriter,
         viewport_size: Size<DevicePixels>,
         command_encoder: &metal::RenderCommandEncoderRef,
@@ -960,6 +1028,21 @@ impl MetalRenderer {
             SpriteInputIndex::ViewportSize as u64,
             mem::size_of_val(&viewport_size) as u64,
             &viewport_size as *const Size<DevicePixels> as *const _,
+        );
+        // The intermediate texture only holds the pass region (see
+        // `path_pass_region`), so sprite UVs are computed relative to the
+        // region's screen origin. The divisor is the texture's actual
+        // (bucketed) size: sampling is normalized over the whole texture,
+        // and the rasterized content occupies the region-sized sub-rect at
+        // its top-left.
+        let mapping = PathSpriteTextureMapping {
+            origin: region.origin,
+            texture_size: self.path_intermediate_size,
+        };
+        command_encoder.set_vertex_bytes(
+            SpriteInputIndex::IntermediateMapping as u64,
+            mem::size_of_val(&mapping) as u64,
+            &mapping as *const PathSpriteTextureMapping as *const _,
         );
 
         command_encoder.set_fragment_texture(
@@ -1602,6 +1685,7 @@ enum SpriteInputIndex {
     ViewportSize = 2,
     AtlasTextureSize = 3,
     AtlasTexture = 4,
+    IntermediateMapping = 5,
 }
 
 #[repr(C)]
@@ -1624,6 +1708,63 @@ enum PathRasterizationInputIndex {
 #[repr(C)]
 pub struct PathSprite {
     pub bounds: Bounds<ScaledPixels>,
+}
+
+/// Maps the path composite pass from screen space into the intermediate
+/// texture, which only holds the pass region (`path_pass_region`): the
+/// texture's top-left sits at `origin` on screen and measures `texture_size`
+/// device pixels.
+#[repr(C)]
+pub struct PathSpriteTextureMapping {
+    pub origin: Point<ScaledPixels>,
+    pub texture_size: Size<DevicePixels>,
+}
+
+/// The device-pixel-aligned rectangle covering the clipped bounds of every
+/// path in one intermediate pass, padded by 1px and clamped to the viewport.
+/// Returns `None` when the paths fall entirely outside the viewport.
+fn path_pass_region(
+    paths: &[Path<ScaledPixels>],
+    viewport_size: Size<DevicePixels>,
+) -> Option<Bounds<ScaledPixels>> {
+    let mut union: Option<Bounds<ScaledPixels>> = None;
+    for path in paths {
+        let clipped = path.clipped_bounds();
+        if clipped.is_empty() {
+            continue;
+        }
+        union = Some(match union {
+            None => clipped,
+            Some(union) => union.union(&clipped),
+        });
+    }
+    let mut bounds = union?;
+    // 1px of headroom for MSAA sample placement at the edges.
+    bounds.origin.x -= ScaledPixels(1.);
+    bounds.origin.y -= ScaledPixels(1.);
+    bounds.size.width += ScaledPixels(2.);
+    bounds.size.height += ScaledPixels(2.);
+    let viewport = Bounds {
+        origin: point(ScaledPixels(0.), ScaledPixels(0.)),
+        size: size(
+            ScaledPixels(viewport_size.width.0 as f32),
+            ScaledPixels(viewport_size.height.0 as f32),
+        ),
+    };
+    let bounds = bounds.intersect(&viewport);
+    if bounds.is_empty() {
+        return None;
+    }
+    // Snap outward to whole device pixels so the region translation never
+    // shifts sample coverage relative to the geometry.
+    let left = bounds.origin.x.0.floor();
+    let top = bounds.origin.y.0.floor();
+    let right = (bounds.origin.x.0 + bounds.size.width.0).ceil();
+    let bottom = (bounds.origin.y.0 + bounds.size.height.0).ceil();
+    Some(Bounds {
+        origin: point(ScaledPixels(left), ScaledPixels(top)),
+        size: size(ScaledPixels(right - left), ScaledPixels(bottom - top)),
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1663,5 +1804,84 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
 
     fn sprite_atlas(&self) -> Arc<dyn gpui::PlatformAtlas> {
         self.renderer.sprite_atlas().clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{PathBuilder, px, rgba};
+
+    /// 真实 Metal 离屏渲染的路径位置回归测试：两个分离的方块（fill Path）
+    /// 经「union region 中间 pass」光栅化后，必须落回各自的屏幕位置。
+    /// 若 region 偏移或 sprite 采样映射有符号/除数错误，方块会整体错位。
+    #[test]
+    fn paths_render_at_screen_positions_via_region_pass() {
+        let device_size = size(DevicePixels(800), DevicePixels(600));
+        let scale = 2.0;
+        // 红：logical (40..80, 30..70) → device (80..160, 60..140)
+        // 绿：logical (200..240, 130..170) → device (400..480, 260..340)
+        // 两者远小于视口，region 中间纹理（≈512×384）远小于全屏
+        let squares: [(f32, f32, u32); 2] = [
+            (40., 30., 0xff0000ff),
+            (200., 130., 0x00ff00ff),
+        ];
+        let mut scene = Scene::default();
+        for (x, y, color) in squares {
+            let mut b = PathBuilder::fill();
+            b.move_to(point(px(x), px(y)));
+            b.line_to(point(px(x + 40.), px(y)));
+            b.line_to(point(px(x + 40.), px(y + 40.)));
+            b.line_to(point(px(x), px(y + 40.)));
+            let mut path = b.build().expect("square path builds");
+            path.color = gpui::Background::from(rgba(color));
+            // 裸构造的 scene 没有 window 注入 content mask，默认空盒会把
+            // clipped_bounds 裁成空、insert_primitive 直接丢弃——这里手动
+            // 盖住整个视口。
+            path.content_mask = gpui::ContentMask {
+                bounds: gpui::Bounds {
+                    origin: point(px(0.), px(0.)),
+                    size: size(px(400.), px(300.)),
+                },
+            };
+            scene.insert_primitive(path.scale(scale));
+        }
+        scene.finish();
+
+        let mut renderer = MetalRenderer::new_headless(Arc::new(Mutex::new(
+            InstanceBufferPool::default(),
+        )));
+        let image = renderer
+            .render_scene_to_image(&scene, device_size)
+            .expect("headless render succeeds");
+
+        let pixel = |x: u32, y: u32| {
+            let p = image.get_pixel(x, y);
+            (p[0], p[1], p[2], p[3])
+        };
+        for (x, y, packed) in squares {
+            let color = rgba(packed);
+            let rgb = [
+                (color.r * 255.) as u8,
+                (color.g * 255.) as u8,
+                (color.b * 255.) as u8,
+                (color.a * 255.) as u8,
+            ];
+            let expected = (rgb[0], rgb[1], rgb[2], rgb[3]);
+            // 方块中心：实心纯色（预乘 alpha）
+            assert_eq!(
+                pixel((x as u32 + 20) * 2, (y as u32 + 20) * 2),
+                expected,
+                "square center at logical ({x},{y})"
+            );
+            // 方块外 5px：仍是背景（headless 不透明清屏为黑），没有整体位移溢出
+            assert_eq!(
+                pixel((x as u32) * 2 - 5, (y as u32 + 20) * 2),
+                (0, 0, 0, 255),
+                "5px left of square at logical ({x},{y})"
+            );
+        }
+        // 视口角落远离所有方块：背景色
+        assert_eq!(pixel(5, 5), (0, 0, 0, 255));
     }
 }
