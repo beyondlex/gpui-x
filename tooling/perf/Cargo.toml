@@ -1,7 +1,6 @@
 [package]
-name = "perf"
+name = "gpui-x-perf"
 version = "0.1.0"
-publish = false
 edition.workspace = true
 license = "Apache-2.0"
 description = "A tool for measuring Zed test performance, with too many Clippy lints"

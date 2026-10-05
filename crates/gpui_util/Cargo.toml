@@ -1,8 +1,8 @@
 [package]
-name = "gpui_util"
+name = "gpui-x-gpui-util"
 version = "0.1.0"
-publish.workspace = true
 edition.workspace = true
+description = "Utility routines for the gpui-x distribution"
 license = "Apache-2.0"
 
 [lib]

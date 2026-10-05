@@ -1,8 +1,8 @@
 [package]
-name = "ztracing"
+name = "gpui-x-ztracing"
 version = "0.1.0"
 edition.workspace = true
-publish.workspace = true
+description = "Tracing setup for the gpui-x distribution"
 license = "Apache-2.0"
 
 [lints]

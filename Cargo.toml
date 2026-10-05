@@ -33,7 +33,6 @@ members = [
 ]
 
 [workspace.package]
-publish = false
 edition = "2024"
 
 [workspace.dependencies]
@@ -42,34 +41,33 @@ edition = "2024"
 # Workspace member crates
 #
 
-collections = { path = "crates/collections", version = "0.1.0" }
-derive_refineable = { path = "crates/refineable/derive_refineable" }
-gpui = { path = "crates/gpui", default-features = false }
-gpui_apple = { path = "crates/gpui_apple" }
-gpui_linux = { path = "crates/gpui_linux", default-features = false }
-gpui_macos = { path = "crates/gpui_macos", default-features = false }
-gpui_macros = { path = "crates/gpui_macros" }
-gpui_platform = { path = "crates/gpui_platform", default-features = false }
-gpui_shared_string = { path = "crates/gpui_shared_string" }
-gpui_util = { path = "crates/gpui_util" }
-gpui_web = { path = "crates/gpui_web" }
-gpui_wgpu = { path = "crates/gpui_wgpu" }
-gpui_windows = { path = "crates/gpui_windows", default-features = false }
-http_client = { path = "crates/http_client" }
+collections = { path = "crates/collections", version = "0.1.0" , package = "gpui-x-collections"}
+derive_refineable = { path = "crates/refineable/derive_refineable" , package = "gpui-x-derive-refineable", version = "0.1.0"}
+gpui = { path = "crates/gpui", default-features = false , package = "gpui-x", version = "0.2.2"}
+gpui_apple = { path = "crates/gpui_apple" , package = "gpui-x-apple", version = "0.1.0"}
+gpui_linux = { path = "crates/gpui_linux", default-features = false , package = "gpui-x-linux", version = "0.1.0"}
+gpui_macos = { path = "crates/gpui_macos", default-features = false , package = "gpui-x-macos", version = "0.1.0"}
+gpui_macros = { path = "crates/gpui_macros" , package = "gpui-x-macros", version = "0.1.0"}
+gpui_platform = { path = "crates/gpui_platform", default-features = false , package = "gpui-x-platform", version = "0.1.0"}
+gpui_shared_string = { path = "crates/gpui_shared_string" , package = "gpui-x-shared-string", version = "0.1.0"}
+gpui_util = { path = "crates/gpui_util" , package = "gpui-x-gpui-util", version = "0.1.0"}
+gpui_web = { path = "crates/gpui_web" , package = "gpui-x-web", version = "0.1.0"}
+gpui_wgpu = { path = "crates/gpui_wgpu" , package = "gpui-x-wgpu", version = "0.1.0"}
+gpui_windows = { path = "crates/gpui_windows", default-features = false , package = "gpui-x-windows", version = "0.1.0"}
+http_client = { path = "crates/http_client" , package = "gpui-x-http-client", version = "0.1.0"}
 http_client_tls = { path = "crates/http_client_tls" }
 path = { path = "crates/path" }
-perf = { path = "tooling/perf" }
-refineable = { path = "crates/refineable" }
+perf = { path = "tooling/perf" , package = "gpui-x-perf", version = "0.1.0"}
+refineable = { path = "crates/refineable" , package = "gpui-x-refineable", version = "0.1.0"}
 reqwest_client = { path = "crates/reqwest_client" }
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", default-features = false, features = ["wav", "playback", "wav_output", "recording", "dither"] }
-scheduler = { path = "crates/scheduler" }
-sum_tree = { path = "crates/sum_tree" }
+scheduler = { path = "crates/scheduler" , package = "gpui-x-scheduler", version = "0.1.0"}
+sum_tree = { path = "crates/sum_tree" , package = "gpui-x-sum-tree", version = "0.1.0"}
 util = { path = "crates/util" }
-util_macros = { path = "crates/util_macros" }
-zlog = { path = "crates/zlog" }
-ztracing = { path = "crates/ztracing" }
-ztracing_macro = { path = "crates/ztracing_macro" }
-
+util_macros = { path = "crates/util_macros" , package = "gpui-x-util-macros", version = "0.1.0"}
+zlog = { path = "crates/zlog" , package = "gpui-x-zlog", version = "0.1.0"}
+ztracing = { path = "crates/ztracing" , package = "gpui-x-ztracing", version = "0.1.0"}
+ztracing_macro = { path = "crates/ztracing_macro" , package = "gpui-x-ztracing-macro", version = "0.1.0"}
 #
 # External crates
 #
@@ -105,7 +103,7 @@ async-pipe = { git = "https://github.com/zed-industries/async-pipe-rs", rev = "8
 async-process = "2.5.0"
 async-recursion = "1.0.0"
 async-std = { version = "1.12", features = ["unstable"] }
-async-tar = { git = "https://github.com/zed-industries/async-tar", rev = "bd3ad6f89df9a9da7a8535958756d6bf465936a0" }
+async-tar = { version = "0.5.0-zed", package = "zed-async-tar" }
 async-task = "4.7"
 async-trait = "0.1"
 async-tungstenite = "0.33"
@@ -338,7 +336,7 @@ proc-macro2 = "1.0.93"
 profiling = "1"
 # replace this with main when #635 is merged
 pollster = "0.4.0"
-proptest = { git = "https://github.com/proptest-rs/proptest", rev = "3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b", features = ["attr-macro"] }
+proptest = { version = "1", features = ["attr-macro"] }
 proptest-derive = "0.8.0"
 prost = "0.14"
 prost-build = "0.14"
@@ -378,7 +376,7 @@ rustix = { version = "1.1", features = ["fs"] }
 rustls = { version = "0.23.26" }
 rustls-platform-verifier = "0.7"
 # WARNING: If you change this, you must also publish a new version of zed-scap to crates.io
-scap = { git = "https://github.com/zed-industries/scap", rev = "4afea48c3b002197176fb19cd0f9b180dd36eaac", default-features = false, package = "zed-scap", version = "0.0.8-zed" }
+scap = { package = "zed-scap", version = "0.0.8-zed", default-features = false }
 schemars = { version = "1.0", features = ["indexmap2"] }
 seccompiler = "0.5"
 semver = { version = "1.0", features = ["serde"] }
