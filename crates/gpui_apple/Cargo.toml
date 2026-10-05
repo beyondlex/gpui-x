@@ -40,5 +40,5 @@ parking_lot.workspace = true
 [target.'cfg(target_os = "macos")'.build-dependencies]
 cbindgen.workspace = true
 
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-gpui = { workspace = true, features = ["test-support"] }
+# PUB-STRIPPED [target.'cfg(target_os = "macos")'.dev-dependencies]
+# PUB-STRIPPED gpui = { workspace = true, features = ["test-support"] }

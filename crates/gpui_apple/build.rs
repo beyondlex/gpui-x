@@ -28,6 +28,18 @@ mod macos_build {
 
         let gpui_dir = find_gpui_crate_dir();
 
+        // Registry builds can't see the gpui-x crate's sources (published
+        // crates are standalone), so fall back to the committed header
+        // snapshot matching the published gpui-x types. Workspace builds
+        // keep generating live so the snapshot can't silently drift; when
+        // gpui's shader-facing types change, regenerate shaders/scene.h.
+        if !gpui_dir.join("src/scene.rs").exists() {
+            let committed =
+                PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("shaders/scene.h");
+            println!("cargo:rerun-if-changed={}", committed.display());
+            return committed;
+        }
+
         let mut config = Config {
             include_guard: Some("SCENE_H".into()),
             language: cbindgen::Language::C,
