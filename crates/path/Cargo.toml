@@ -1,8 +1,8 @@
 [package]
-name = "path"
+name = "gpui-x-path"
 version = "0.1.0"
 edition.workspace = true
-publish = false
+description = "Path utilities for the gpui-x distribution"
 license = "Apache-2.0"
 
 [lib]

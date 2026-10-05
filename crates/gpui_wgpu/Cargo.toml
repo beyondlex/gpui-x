@@ -43,11 +43,11 @@ font-kit = { package = "zed-font-kit", version = "0.14.1-zed", optional = true }
 web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
 wgpu = { workspace = true, features = ["webgl"] }
 
-[dev-dependencies]
-criterion.workspace = true
-gpui = { workspace = true, features = ["test-support"] }
-naga = { version = "29.0.4", features = ["wgsl-in"] }
-
+# PUB-STRIPPED [dev-dependencies]
+# PUB-STRIPPED criterion.workspace = true
+# PUB-STRIPPED gpui = { workspace = true, features = ["test-support"] }
+# PUB-STRIPPED naga = { version = "29.0.4", features = ["wgsl-in"] }
+# PUB-STRIPPED 
 [[bench]]
 name = "layout_line"
 harness = false

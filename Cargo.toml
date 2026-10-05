@@ -56,14 +56,14 @@ gpui_wgpu = { path = "crates/gpui_wgpu" , package = "gpui-x-wgpu", version = "0.
 gpui_windows = { path = "crates/gpui_windows", default-features = false , package = "gpui-x-windows", version = "0.1.0"}
 http_client = { path = "crates/http_client" , package = "gpui-x-http-client", version = "0.1.0"}
 http_client_tls = { path = "crates/http_client_tls" }
-path = { path = "crates/path" }
+path = { path = "crates/path", package = "gpui-x-path", version = "0.1.0" }
 perf = { path = "tooling/perf" , package = "gpui-x-perf", version = "0.1.0"}
 refineable = { path = "crates/refineable" , package = "gpui-x-refineable", version = "0.1.0"}
 reqwest_client = { path = "crates/reqwest_client" }
 rodio = { git = "https://github.com/RustAudio/rodio", rev = "e50e726ddd0292f6ef9de0dda6b90af4ed1fb66a", default-features = false, features = ["wav", "playback", "wav_output", "recording", "dither"] }
 scheduler = { path = "crates/scheduler" , package = "gpui-x-scheduler", version = "0.1.0"}
 sum_tree = { path = "crates/sum_tree" , package = "gpui-x-sum-tree", version = "0.1.0"}
-util = { path = "crates/util" }
+util = { path = "crates/util", package = "gpui-x-util", version = "0.1.0" }
 util_macros = { path = "crates/util_macros" , package = "gpui-x-util-macros", version = "0.1.0"}
 zlog = { path = "crates/zlog" , package = "gpui-x-zlog", version = "0.1.0"}
 ztracing = { path = "crates/ztracing" , package = "gpui-x-ztracing", version = "0.1.0"}
