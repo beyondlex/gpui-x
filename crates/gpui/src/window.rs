@@ -5936,6 +5936,10 @@ impl Window {
         if currently_pending.focus.is_some() && currently_pending.focus != self.focus {
             currently_pending = PendingInput::default();
         }
+        // A printable key that arrives while a multi-stroke sequence is pending
+        // is that sequence's continuation: it must complete the binding, not
+        // type into the focused element.
+        let had_pending_keystrokes = !currently_pending.keystrokes.is_empty();
 
         let match_result = self.rendered_frame.dispatch_tree.dispatch_key(
             currently_pending.keystrokes,
@@ -5988,15 +5992,17 @@ impl Window {
 
         // The focused text input wins over bindings for character-carrying
         // chords (the platform flags AltGr-style keys in
-        // `prefer_character_input`) and for the modified editing keys (⌥/⌘ +
-        // backspace/left/right, fn+home/end/delete): these carry a modifier,
-        // so binding dispatch would claim them, while the focused element
-        // needs them for word and line editing.
+        // `prefer_character_input`) and for unmodified printable keys: a typed
+        // character belongs to the element holding focus, and without this
+        // branch the window's conditional letter bindings (j/k…) would eat it.
+        // Modified editing keys (⌥⌫ …) keep going to binding dispatch — the
+        // window that owns the input binds them under its own deeper context.
         let skip_bindings = event
             .downcast_ref::<KeyDownEvent>()
             .filter(|key_down_event| {
                 key_down_event.prefer_character_input
-                    || key_down_event.keystroke.is_modified_edit_key()
+                    || (key_down_event.keystroke.is_unmodified_printable()
+                        && !had_pending_keystrokes)
             })
             .map(|_| {
                 self.platform_window

@@ -235,20 +235,21 @@ impl Keystroke {
                 || self.modifiers.alt)
     }
 
-    /// Whether this is one of the modified editing keys — ⌥/⌘ + backspace,
-    /// ⌥/⌘ + left/right, and `home`/`end`/`delete` (what fn+←/→/⌫ arrive as on
-    /// macOS). These carry a modifier, so without special handling they are
-    /// released to binding dispatch even while a text input holds focus; a
-    /// focused input element wants them for word and line editing instead.
-    /// A bare key is not one: bare characters and bare backspace reach the
-    /// input element through the ordinary key path.
-    pub fn is_modified_edit_key(&self) -> bool {
-        let modified = self.modifiers.platform || self.modifiers.alt || self.modifiers.function;
-        modified
-            && matches!(
-                self.key.as_str(),
-                "backspace" | "delete" | "left" | "right" | "home" | "end"
-            )
+    /// Whether this is an unmodified printable keystroke — a character the
+    /// user typed, carrying nothing but shift (a capital). These belong to the
+    /// focused text input whenever one accepts text: binding dispatch has no
+    /// claim on a character nobody bound, but list-navigation letters (j/k…)
+    /// are bound conditionally in every window, and without this
+    /// classification they would eat the character instead of letting the
+    /// focused element type it.
+    pub fn is_unmodified_printable(&self) -> bool {
+        self.key_char
+            .as_ref()
+            .is_some_and(|key_char| key_char.chars().all(|c| !c.is_control()))
+            && !self.modifiers.control
+            && !self.modifiers.platform
+            && !self.modifiers.alt
+            && !self.modifiers.function
     }
 
     /// Returns a new keystroke with the key_char filled.
@@ -800,36 +801,37 @@ mod tests {
     }
 
     #[test]
-    fn modified_edit_keys_are_the_word_and_line_editing_chords() {
-        // The macOS word/line editing keys: every one carries a modifier, so
-        // binding dispatch would claim them without the classification.
-        for source in [
-            "alt-backspace",
-            "cmd-backspace",
-            "alt-left",
-            "cmd-right",
-            "fn-home",
-            "fn-end",
-            "fn-delete",
-        ] {
-            assert!(ks(source).is_modified_edit_key(), "{source} is an edit key");
-        }
-
-        // A bare key reaches the input element through the ordinary key path:
-        // it is not one of the modified editing keys.
-        for source in ["backspace", "left", "delete", "a"] {
+    fn unmodified_printable_keys_are_typed_characters() {
+        // A character the user typed, carrying nothing but shift: these belong
+        // to the focused text input. The hook sees keystrokes as dispatched,
+        // which fills key_char for named printable keys (`with_simulated_ime`
+        // is what headless dispatch applies and what the platform's key_char
+        // already carries).
+        for source in ["a", "A", "shift-a", "/", "space", "1"] {
+            let typed = ks(source).with_simulated_ime();
             assert!(
-                !ks(source).is_modified_edit_key(),
-                "{source} is not a modified edit key"
+                typed.is_unmodified_printable(),
+                "{source} is a typed character"
             );
         }
 
-        // A modified key that is not an editing key belongs to the keymap:
-        // alt-l is ¬, cmd-v is paste.
-        for source in ["alt-l", "cmd-v", "alt-1", "shift-backspace"] {
+        // No character, or a character behind a modifier the keymap owns:
+        // alt-l is ¬, cmd-v is paste, ctrl chords are the keymap's, and bare
+        // editing keys (backspace, arrows) carry no key_char at all.
+        for source in [
+            "backspace",
+            "left",
+            "enter",
+            "escape",
+            "alt-l",
+            "cmd-v",
+            "ctrl-w",
+            "fn-home",
+        ] {
+            let typed = ks(source).with_simulated_ime();
             assert!(
-                !ks(source).is_modified_edit_key(),
-                "{source} is not a modified edit key"
+                !typed.is_unmodified_printable(),
+                "{source} is not a typed character"
             );
         }
     }
