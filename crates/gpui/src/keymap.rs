@@ -242,12 +242,18 @@ impl Keymap {
         (bindings, !pending.is_empty())
     }
     /// Check if the given binding is enabled, given a certain key context.
-    /// Returns the deepest depth at which the binding matches, or None if it doesn't match.
+    /// Returns the depth at which the binding competes for dispatch: a
+    /// conditional binding matches at the deepest stack position its predicate
+    /// covers, while an unconditional binding competes at the root. A
+    /// conditional match therefore strictly outranks an unconditional one no
+    /// matter which was registered first — without this, an unconditional
+    /// binding claimed the whole stack's depth and conditional bindings could
+    /// never win by depth, only by registration order.
     fn binding_enabled(&self, binding: &KeyBinding, contexts: &[KeyContext]) -> Option<usize> {
         if let Some(predicate) = &binding.context_predicate {
             predicate.depth_of(contexts)
         } else {
-            Some(contexts.len())
+            Some(0)
         }
     }
 
@@ -312,11 +318,12 @@ mod tests {
         let mut keymap = Keymap::default();
         keymap.add_bindings(bindings.clone());
 
-        // global bindings are enabled in all contexts
+        // global bindings compete at the root: their enabled depth is 0
+        // regardless of how deep the context stack is
         assert_eq!(keymap.binding_enabled(&bindings[0], &[]), Some(0));
         assert_eq!(
             keymap.binding_enabled(&bindings[0], &[KeyContext::parse("terminal").unwrap()]),
-            Some(1)
+            Some(0)
         );
 
         // contextual bindings are enabled in contexts that match their predicate
@@ -364,6 +371,47 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(result[0].action.partial_eq(&ActionGamma {}));
         assert!(result[1].action.partial_eq(&ActionBeta {}));
+    }
+
+    /// A conditional binding whose predicate matches the focused context must
+    /// strictly outrank an unconditional binding on the same keystroke — even
+    /// when the conditional was registered **first**. Depth is what decides,
+    /// not registration order: the unconditional binding competes at the root,
+    /// so a conditional match at any deeper position wins no matter what order
+    /// the two were added in.
+    #[test]
+    fn test_conditional_strictly_outranks_unconditional() {
+        // The conditional is registered first: under registration-order
+        // tie-breaking (what an unconditional binding's full-stack depth used
+        // to produce) the later unconditional binding would win.
+        let bindings = [
+            KeyBinding::new("ctrl-a", ActionBeta {}, Some("pane")),
+            KeyBinding::new("ctrl-a", ActionAlpha {}, None),
+        ];
+
+        let mut keymap = Keymap::default();
+        keymap.add_bindings(bindings);
+
+        // Inside the `pane` context the conditional wins.
+        let (result, pending) = keymap.bindings_for_input(
+            &[Keystroke::parse("ctrl-a").unwrap()],
+            &[KeyContext::parse("pane").unwrap()],
+        );
+        assert!(!pending);
+        assert_eq!(result.len(), 2);
+        assert!(
+            result[0].action.partial_eq(&ActionBeta {}),
+            "the conditional binding must outrank the unconditional one"
+        );
+
+        // Outside it the unconditional binding still fires.
+        let (result, pending) = keymap.bindings_for_input(
+            &[Keystroke::parse("ctrl-a").unwrap()],
+            &[KeyContext::parse("barf").unwrap()],
+        );
+        assert!(!pending);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].action.partial_eq(&ActionAlpha {}));
     }
 
     #[test]

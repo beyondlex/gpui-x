@@ -611,6 +611,20 @@ impl TestAppContext {
         .unwrap();
     }
 
+    /// dispatches a single Keystroke with text-input priority: when the focused
+    /// element accepts text input, keybindings are skipped and the keystroke
+    /// belongs to the element (see [`Window::dispatch_keystroke_preferring_input`])
+    pub fn dispatch_keystroke_preferring_input(
+        &mut self,
+        window: AnyWindowHandle,
+        keystroke: Keystroke,
+    ) {
+        self.update_window(window, |_, window, cx| {
+            window.dispatch_keystroke_preferring_input(keystroke, cx)
+        })
+        .unwrap();
+    }
+
     /// Returns the `TestWindow` backing the given handle.
     pub(crate) fn test_window(&self, window: AnyWindowHandle) -> TestWindow {
         self.app

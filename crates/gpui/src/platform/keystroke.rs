@@ -235,6 +235,22 @@ impl Keystroke {
                 || self.modifiers.alt)
     }
 
+    /// Whether this is one of the modified editing keys — ⌥/⌘ + backspace,
+    /// ⌥/⌘ + left/right, and `home`/`end`/`delete` (what fn+←/→/⌫ arrive as on
+    /// macOS). These carry a modifier, so without special handling they are
+    /// released to binding dispatch even while a text input holds focus; a
+    /// focused input element wants them for word and line editing instead.
+    /// A bare key is not one: bare characters and bare backspace reach the
+    /// input element through the ordinary key path.
+    pub fn is_modified_edit_key(&self) -> bool {
+        let modified = self.modifiers.platform || self.modifiers.alt || self.modifiers.function;
+        modified
+            && matches!(
+                self.key.as_str(),
+                "backspace" | "delete" | "left" | "right" | "home" | "end"
+            )
+    }
+
     /// Returns a new keystroke with the key_char filled.
     /// This is used for dispatch_keystroke where we want users to
     /// be able to simulate typing "space", etc.
@@ -773,4 +789,48 @@ fn unparse(modifiers: &Modifiers, key: &str) -> String {
     }
     result.push_str(&key);
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ks(source: &str) -> Keystroke {
+        Keystroke::parse(source).unwrap()
+    }
+
+    #[test]
+    fn modified_edit_keys_are_the_word_and_line_editing_chords() {
+        // The macOS word/line editing keys: every one carries a modifier, so
+        // binding dispatch would claim them without the classification.
+        for source in [
+            "alt-backspace",
+            "cmd-backspace",
+            "alt-left",
+            "cmd-right",
+            "fn-home",
+            "fn-end",
+            "fn-delete",
+        ] {
+            assert!(ks(source).is_modified_edit_key(), "{source} is an edit key");
+        }
+
+        // A bare key reaches the input element through the ordinary key path:
+        // it is not one of the modified editing keys.
+        for source in ["backspace", "left", "delete", "a"] {
+            assert!(
+                !ks(source).is_modified_edit_key(),
+                "{source} is not a modified edit key"
+            );
+        }
+
+        // A modified key that is not an editing key belongs to the keymap:
+        // alt-l is ¬, cmd-v is paste.
+        for source in ["alt-l", "cmd-v", "alt-1", "shift-backspace"] {
+            assert!(
+                !ks(source).is_modified_edit_key(),
+                "{source} is not a modified edit key"
+            );
+        }
+    }
 }

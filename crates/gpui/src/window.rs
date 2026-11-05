@@ -5408,12 +5408,35 @@ impl Window {
     /// Dispatch a given keystroke as though the user had typed it.
     /// You can create a keystroke with Keystroke::parse("").
     pub fn dispatch_keystroke(&mut self, keystroke: Keystroke, cx: &mut App) -> bool {
+        self.dispatch_keystroke_with_priority(keystroke, false, cx)
+    }
+
+    /// Dispatch a keystroke as though the user had typed it, with the same
+    /// text-input priority a real keyboard gives character keys: when the
+    /// focused element accepts text input, keybindings are skipped and the
+    /// keystroke belongs to the element. Headless tests need this to exercise
+    /// the text-input-over-bindings path; [`Self::dispatch_keystroke`] keeps
+    /// the platform keydown default (bindings first).
+    pub fn dispatch_keystroke_preferring_input(
+        &mut self,
+        keystroke: Keystroke,
+        cx: &mut App,
+    ) -> bool {
+        self.dispatch_keystroke_with_priority(keystroke, true, cx)
+    }
+
+    fn dispatch_keystroke_with_priority(
+        &mut self,
+        keystroke: Keystroke,
+        prefer_character_input: bool,
+        cx: &mut App,
+    ) -> bool {
         let keystroke = keystroke.with_simulated_ime();
         let result = self.dispatch_event(
             PlatformInput::KeyDown(KeyDownEvent {
                 keystroke: keystroke.clone(),
                 is_held: false,
-                prefer_character_input: false,
+                prefer_character_input,
             }),
             cx,
         );
@@ -5963,9 +5986,18 @@ impl Window {
             return;
         }
 
+        // The focused text input wins over bindings for character-carrying
+        // chords (the platform flags AltGr-style keys in
+        // `prefer_character_input`) and for the modified editing keys (⌥/⌘ +
+        // backspace/left/right, fn+home/end/delete): these carry a modifier,
+        // so binding dispatch would claim them, while the focused element
+        // needs them for word and line editing.
         let skip_bindings = event
             .downcast_ref::<KeyDownEvent>()
-            .filter(|key_down_event| key_down_event.prefer_character_input)
+            .filter(|key_down_event| {
+                key_down_event.prefer_character_input
+                    || key_down_event.keystroke.is_modified_edit_key()
+            })
             .map(|_| {
                 self.platform_window
                     .take_input_handler()
