@@ -2502,6 +2502,35 @@ impl Window {
             });
     }
 
+    /// Ask the nodes on the focus dispatch path, deepest first, whether they claim
+    /// this keystroke before bindings are consulted. Modifier-release events are
+    /// not real key presses and never reach these handlers.
+    fn dispatch_pre_binding_key_handlers(
+        &mut self,
+        event: &dyn Any,
+        keystroke: &Keystroke,
+        dispatch_path: &SmallVec<[DispatchNodeId; 32]>,
+        cx: &mut App,
+    ) -> bool {
+        if event.downcast_ref::<KeyDownEvent>().is_none() {
+            return false;
+        }
+        for node_id in dispatch_path.iter().rev() {
+            let handler = self
+                .rendered_frame
+                .dispatch_tree
+                .node(*node_id)
+                .pre_binding_key_handler
+                .clone();
+            if let Some(handler) = handler {
+                if handler(keystroke, self, cx) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Schedules the given function to be run at the end of the current effect cycle, allowing entities
     /// that are currently on the stack to be returned to the app.
     pub fn defer(&self, cx: &mut App, f: impl FnOnce(&mut Window, &mut App) + 'static) {
@@ -5184,6 +5213,27 @@ impl Window {
         self.next_frame.dispatch_tree.set_key_context(context);
     }
 
+    /// Claim keys before any binding is matched, for the element currently being
+    /// painted. The handler only runs when that element is on the focus dispatch
+    /// path, and it is consulted deepest-first (the focused node wins over its
+    /// ancestors). See [`crate::InteractiveElement::on_pre_binding_key`] for the
+    /// fluent API.
+    ///
+    /// This is the focus-scoped counterpart of [`App::intercept_keystrokes`]:
+    /// an input mode declares its claim on its own element instead of a global
+    /// interceptor having to enumerate every window's root type. Returning
+    /// `true` consumes the keystroke before bindings and before a pending
+    /// multi-stroke sequence can be started.
+    pub fn set_pre_binding_key_handler(
+        &mut self,
+        handler: impl Fn(&Keystroke, &mut Window, &mut App) -> bool + 'static,
+    ) {
+        self.invalidator.debug_assert_paint();
+        self.next_frame
+            .dispatch_tree
+            .set_pre_binding_key_handler(Rc::new(handler));
+    }
+
     /// Sets the focus handle for the current element. This handle will be used to manage focus state
     /// and keyboard event dispatch for the element.
     ///
@@ -5928,6 +5978,17 @@ impl Window {
         cx.propagate_event = true;
         self.dispatch_keystroke_interceptors(event, self.context_stack(), cx);
         if !cx.propagate_event {
+            self.finish_dispatch_key_event(event, dispatch_path, self.context_stack(), cx);
+            return;
+        }
+
+        // A node on the focus path may claim the whole keystroke ahead of the
+        // keymap. This must happen before dispatch_key: a dynamic chord engine
+        // (e.g. vim's `g`-prefixed commands) needs the raw key, and a pending
+        // multi-stroke binding must never be started for a key that belongs to
+        // a text input mode.
+        if self.dispatch_pre_binding_key_handlers(event, &keystroke, &dispatch_path, cx) {
+            cx.stop_propagation();
             self.finish_dispatch_key_event(event, dispatch_path, self.context_stack(), cx);
             return;
         }

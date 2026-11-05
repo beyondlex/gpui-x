@@ -79,12 +79,20 @@ pub(crate) struct DispatchTree {
     action_registry: Rc<ActionRegistry>,
 }
 
+/// A hook attached to a node on the focus dispatch path. It runs after the App
+/// keystroke interceptors but *before* the keymap is consulted, so the node can
+/// claim every key of an input mode (text entry, a vim engine's dynamic chords,
+/// a modal dialog) without a binding eating it first. Returning `true` consumes
+/// the keystroke; no pending multi-stroke sequence is started for it.
+pub(crate) type PreBindingKeyHandler = Rc<dyn Fn(&Keystroke, &mut Window, &mut App) -> bool>;
+
 #[derive(Default)]
 pub(crate) struct DispatchNode {
     pub key_listeners: Vec<KeyListener>,
     pub action_listeners: Vec<DispatchActionListener>,
     pub modifiers_changed_listeners: Vec<ModifiersChangedListener>,
     pub context: Option<KeyContext>,
+    pub pre_binding_key_handler: Option<PreBindingKeyHandler>,
     pub focus_id: Option<FocusId>,
     view_id: Option<EntityId>,
     parent: Option<DispatchNodeId>,
@@ -215,6 +223,12 @@ impl DispatchTree {
     pub fn set_key_context(&mut self, context: KeyContext) {
         self.active_node().context = Some(context.clone());
         self.context_stack.push(context);
+    }
+
+    /// Attach a pre-binding key claim to the element currently being painted.
+    /// Only elements on the focus dispatch path are consulted at dispatch time.
+    pub fn set_pre_binding_key_handler(&mut self, handler: PreBindingKeyHandler) {
+        self.active_node().pre_binding_key_handler = Some(handler);
     }
 
     pub fn set_focus_id(&mut self, focus_id: FocusId) {
@@ -1687,5 +1701,162 @@ mod tests {
 
         cx.simulate_keystrokes("ctrl-b [");
         test.update(cx, |test, _| assert_eq!(test.text.borrow().as_str(), "["))
+    }
+
+    /// A tiny tree whose root, focused child, and unfocused sibling each declare
+    /// a pre-binding claim. `log` records the order in which they see a key.
+    struct PreBindingKeyView {
+        root_focus: FocusHandle,
+        child_focus: FocusHandle,
+        log: Rc<RefCell<Vec<String>>>,
+        root_claims: Rc<Cell<bool>>,
+        child_claims: Rc<Cell<bool>>,
+        sibling_calls: Rc<Cell<usize>>,
+        action_count: Rc<Cell<usize>>,
+    }
+
+    impl PreBindingKeyView {
+        fn new(cx: &mut Context<Self>) -> Self {
+            Self {
+                root_focus: cx.focus_handle(),
+                child_focus: cx.focus_handle(),
+                log: Rc::default(),
+                root_claims: Rc::new(Cell::new(true)),
+                child_claims: Rc::new(Cell::new(false)),
+                sibling_calls: Rc::default(),
+                action_count: Rc::default(),
+            }
+        }
+    }
+
+    impl Render for PreBindingKeyView {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            use crate::{InteractiveElement as _, ParentElement as _, Styled as _};
+            let log = self.log.clone();
+            let root_log = log.clone();
+            let root_claims = self.root_claims.clone();
+            let child_claims = self.child_claims.clone();
+            let sibling_calls = self.sibling_calls.clone();
+            let action_count = self.action_count.clone();
+            crate::div()
+                .key_context("Terminal")
+                .track_focus(&self.root_focus)
+                .size_full()
+                .on_action(move |_: &TestAction, _, _| {
+                    action_count.set(action_count.get() + 1);
+                })
+                .on_pre_binding_key(move |keystroke, _, _| {
+                    root_log
+                        .borrow_mut()
+                        .push(format!("root:{}", keystroke.key));
+                    root_claims.get()
+                })
+                .child(
+                    crate::div()
+                        .track_focus(&self.child_focus)
+                        .on_pre_binding_key(move |keystroke, _, _| {
+                            log.borrow_mut().push(format!("child:{}", keystroke.key));
+                            child_claims.get()
+                        }),
+                )
+                .child(crate::div().on_pre_binding_key(move |_, _, _| {
+                    sibling_calls.set(sibling_calls.get() + 1);
+                    false
+                }))
+        }
+    }
+
+    fn setup_pre_binding_key_test(
+        cx: &mut TestAppContext,
+        bindings: impl IntoIterator<Item = KeyBinding>,
+    ) -> (crate::Entity<PreBindingKeyView>, &mut VisualTestContext) {
+        cx.update(|cx| cx.bind_keys(bindings));
+        let (view, cx) = cx.add_window_view(|_, cx| PreBindingKeyView::new(cx));
+        let root_focus = cx.update(|_, cx| view.read(cx).root_focus.clone());
+        cx.update(|window, cx| {
+            window.focus(&root_focus, cx);
+            window.activate_window();
+        });
+        cx.run_until_parked();
+        (view, cx)
+    }
+
+    #[crate::test]
+    fn test_pre_binding_key_handler_claims_ahead_of_bindings(cx: &mut TestAppContext) {
+        let (view, cx) =
+            setup_pre_binding_key_test(cx, [KeyBinding::new("j", TestAction, Some("Terminal"))]);
+
+        cx.simulate_keystrokes("j");
+        view.update(cx, |view, _| {
+            assert_eq!(*view.log.borrow(), vec!["root:j".to_string()]);
+            assert_eq!(view.action_count.get(), 0);
+        });
+        cx.update(|window, _| assert!(!window.has_pending_keystrokes()));
+
+        // Declining the claim hands the very same key back to the keymap.
+        view.update(cx, |view, _| {
+            view.log.borrow_mut().clear();
+            view.root_claims.set(false);
+        });
+        cx.simulate_keystrokes("j");
+        view.update(cx, |view, _| {
+            assert_eq!(*view.log.borrow(), vec!["root:j".to_string()]);
+            assert_eq!(view.action_count.get(), 1);
+        });
+    }
+
+    #[crate::test]
+    fn test_pre_binding_key_handlers_walk_only_the_focus_path_deepest_first(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx) =
+            setup_pre_binding_key_test(cx, [KeyBinding::new("j", TestAction, Some("Terminal"))]);
+        let child_focus = cx.update(|_, cx| view.read(cx).child_focus.clone());
+        cx.update(|window, cx| {
+            window.focus(&child_focus, cx);
+            window.refresh();
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("j");
+        view.update(cx, |view, _| {
+            // The unfocused sibling is never on the dispatch path.
+            assert_eq!(
+                *view.log.borrow(),
+                vec!["child:j".to_string(), "root:j".to_string()]
+            );
+            assert_eq!(view.sibling_calls.get(), 0);
+            assert_eq!(view.action_count.get(), 0);
+        });
+
+        // A claiming child ends the walk: the ancestor is not consulted.
+        view.update(cx, |view, _| {
+            view.log.borrow_mut().clear();
+            view.child_claims.set(true);
+        });
+        cx.simulate_keystrokes("j");
+        view.update(cx, |view, _| {
+            assert_eq!(*view.log.borrow(), vec!["child:j".to_string()]);
+        });
+    }
+
+    #[crate::test]
+    fn test_pre_binding_key_handler_stops_a_multi_stroke_binding_from_going_pending(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx) =
+            setup_pre_binding_key_test(cx, [KeyBinding::new("g g", TestAction, Some("Terminal"))]);
+
+        cx.simulate_keystrokes("g");
+        cx.update(|window, _| assert!(!window.has_pending_keystrokes()));
+        cx.simulate_keystrokes("g");
+        view.update(cx, |view, _| {
+            assert_eq!(
+                *view.log.borrow(),
+                vec!["root:g".to_string(), "root:g".to_string()]
+            );
+            assert_eq!(view.action_count.get(), 0);
+        });
+        cx.update(|window, _| assert!(!window.has_pending_keystrokes()));
     }
 }

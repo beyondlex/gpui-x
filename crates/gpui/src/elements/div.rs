@@ -20,7 +20,7 @@ use crate::{
     Display, Element, ElementId, Entity, EntityId, ExternalDragPayload, ExternalDragPayloadSource,
     FileDropEvent, FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId,
     InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
-    KeyboardClickEvent, LayoutId, LongPressEvent, ModifiersChangedEvent, MouseButton,
+    KeyboardClickEvent, Keystroke, LayoutId, LongPressEvent, ModifiersChangedEvent, MouseButton,
     MouseClickEvent, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent,
     MouseUpEvent, OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels, Point, Render,
     ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, Styled, Task, TooltipId,
@@ -835,6 +835,28 @@ pub trait InteractiveElement: Sized {
         if let Some(key_context) = key_context.try_into().log_err() {
             self.interactivity().key_context = Some(key_context);
         }
+        self
+    }
+
+    /// Claim every keystroke of an input mode *before* the keymap is consulted.
+    ///
+    /// The handler runs only while this element is on the focus dispatch path,
+    /// and handlers are consulted deepest-first, so a focused child claims a
+    /// key ahead of its ancestors. Return `true` to consume the keystroke: no
+    /// binding fires and no pending multi-stroke sequence starts; the event
+    /// then finishes with propagation already stopped, exactly as it does for
+    /// [`App::intercept_keystrokes`]. Return `false` to let normal dispatch
+    /// continue.
+    ///
+    /// This is for input modes that need raw keys — text entry, a vim engine's
+    /// dynamic chords, a modal dialog. Ordinary shortcuts belong in keymap
+    /// bindings instead; unlike [`App::intercept_keystrokes`], this claim is
+    /// scoped to the element that owns the input state.
+    fn on_pre_binding_key(
+        mut self,
+        handler: impl Fn(&Keystroke, &mut Window, &mut App) -> bool + 'static,
+    ) -> Self {
+        self.interactivity().pre_binding_key_handler = Some(Rc::new(handler));
         self
     }
 
@@ -2135,6 +2157,10 @@ pub struct Interactivity {
     pub(crate) tooltip_id: Option<TooltipId>,
     pub(crate) content_size: Size<Pixels>,
     pub(crate) key_context: Option<KeyContext>,
+    /// Claims every key of an input mode before the keymap sees it. Only nodes
+    /// on the focus dispatch path are consulted, deepest first.
+    pub(crate) pre_binding_key_handler:
+        Option<Rc<dyn Fn(&Keystroke, &mut Window, &mut App) -> bool>>,
     pub(crate) focusable: bool,
     pub(crate) tracked_focus_handle: Option<FocusHandle>,
     pub(crate) tracked_scroll_handle: Option<ScrollHandle>,
@@ -3272,6 +3298,11 @@ impl Interactivity {
         let action_listeners = mem::take(&mut self.action_listeners);
         if let Some(context) = self.key_context.clone() {
             window.set_key_context(context);
+        }
+        if let Some(handler) = self.pre_binding_key_handler.take() {
+            window.set_pre_binding_key_handler(move |keystroke, window, cx| {
+                handler(keystroke, window, cx)
+            });
         }
 
         for listener in key_down_listeners {
