@@ -993,7 +993,13 @@ impl VisualTestContext {
     }
 
     /// debug_bounds returns the bounds of the element with the given selector.
-    pub fn debug_bounds(&mut self, selector: &'static str) -> Option<Bounds<Pixels>> {
+    ///
+    /// `&str`, not `&'static str`: the map is keyed by `String` and looked up
+    /// by content, so a caller that *builds* its selector — a scope stack
+    /// prefixing `log_view.toolbar.search_box.chip.regex`, a loop over the
+    /// surfaces — asks the same question as one that passes a literal. Callers
+    /// naming a fixed string read exactly as before.
+    pub fn debug_bounds(&mut self, selector: &str) -> Option<Bounds<Pixels>> {
         self.update(|window, _| window.rendered_frame.debug_bounds.get(selector).copied())
     }
 
