@@ -2617,7 +2617,7 @@ dependencies = [
 
 [[package]]
 name = "gpui-x-apple"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "block",
@@ -2735,7 +2735,7 @@ dependencies = [
 
 [[package]]
 name = "gpui-x-macos"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -2811,7 +2811,7 @@ dependencies = [
 
 [[package]]
 name = "gpui-x-platform"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "console_error_panic_hook",
  "criterion",

@@ -591,6 +591,9 @@ impl MetalRenderer {
         let handler = ConcreteBlock::new(move |_: &metal::DrawableRef| {
             let _ = sender.try_send(());
         });
+        // addPresentedHandler: retains its own copy. Heap-copy first so Rust
+        // does not free the block descriptor while Metal still owns it.
+        let handler = handler.copy();
         tracked_drawable.add_presented_handler(&handler);
 
         if self.presents_with_transaction {
