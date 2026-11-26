@@ -8,3 +8,4 @@
 0008-gpui-cold-path-noop-shim.patch
 0009-macos-atomic-top-anchored-resize.patch
 0010-apple-layer-top-left-gravity.patch
+0011-apple-drain-presented-frames.patch

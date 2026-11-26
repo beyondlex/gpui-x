@@ -22,6 +22,7 @@
 | `0008-gpui-cold-path-noop-shim` | `std::hint::cold_path` 换本地 no-op shim，摆脱对 nightly feature 的依赖 |
 | `0009-macos-atomic-top-anchored-resize` | macOS 程序化 resize 保留左上角，并在同一 Core Animation transaction 内强制重绘，避免旧尺寸 drawable 被拉伸一帧 |
 | `0010-apple-layer-top-left-gravity` | CAMetalLayer 的 contents gravity 固定为左上角；若旧 drawable 晚一帧，仅裁切而不缩放成拉伸/坍缩的画面 |
+| `0011-apple-drain-presented-frames` | resize 前等待所有在途 drawable 真正呈现；只等 command buffer 完成不能阻止旧帧在 bounds 变化后落屏 |
 
 发布打包层（不属于功能补丁，发布时重做即可）：24 个发布成员改名 `gpui-x-*`、crate 间依赖切 registry、`crates/gpui_apple/shaders/scene.h` 快照 + `build.rs` 找不到兄弟 crate 源码时回退读取该快照。
 

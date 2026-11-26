@@ -20,12 +20,22 @@ use core_video::{
 };
 use foreign_types::{ForeignType, ForeignTypeRef};
 use metal::{
-    CAMetalLayer, CommandQueue, MTLGPUFamily, MTLPixelFormat, MTLResourceOptions, NSRange,
+    CAMetalLayer, CommandBuffer, CommandQueue, MTLGPUFamily, MTLPixelFormat, MTLResourceOptions,
+    MetalDrawable, NSRange,
 };
 use objc::{self, msg_send, sel, sel_impl};
 use parking_lot::Mutex;
 
-use std::{cell::Cell, ffi::c_void, mem, mem::MaybeUninit, ops::Range, ptr, slice, sync::Arc};
+use std::{
+    cell::Cell,
+    ffi::c_void,
+    mem,
+    mem::MaybeUninit,
+    ops::Range,
+    ptr, slice,
+    sync::{Arc, mpsc},
+    time::{Duration, Instant},
+};
 
 // Exported to metal
 pub(crate) type PointF = gpui::Point<f32>;
@@ -113,12 +123,19 @@ impl InstanceBufferPool {
     }
 }
 
+struct PendingPresentation {
+    command_buffer: CommandBuffer,
+    drawable: MetalDrawable,
+    presented: mpsc::Receiver<()>,
+}
+
 pub struct MetalRenderer {
     device: metal::Device,
     layer: Option<metal::MetalLayer>,
     is_apple_gpu: bool,
     is_unified_memory: bool,
     presents_with_transaction: bool,
+    pending_presentations: Vec<PendingPresentation>,
     /// For headless rendering, tracks whether output should be opaque
     opaque: bool,
     command_queue: CommandQueue,
@@ -356,6 +373,7 @@ impl MetalRenderer {
             device,
             layer,
             presents_with_transaction: false,
+            pending_presentations: Vec::new(),
             is_apple_gpu,
             is_unified_memory,
             opaque,
@@ -419,6 +437,34 @@ impl MetalRenderer {
         // The path intermediate texture is no longer viewport-sized; it is
         // grown/shrunk per frame from the union of the drawn paths' bounds
         // (see `ensure_path_intermediate_textures`).
+    }
+
+    /// Wait until every frame submitted before this call has reached the
+    /// screen. A completed command buffer only means the GPU has finished;
+    /// Core Animation may still present its drawable later, after the layer
+    /// bounds have changed. `presented_time` and the handler installed before
+    /// submission distinguish those two events.
+    pub fn wait_for_presentation(&mut self) {
+        if self.pending_presentations.is_empty() {
+            return;
+        }
+
+        let deadline = Instant::now() + Duration::from_millis(100);
+        for frame in mem::take(&mut self.pending_presentations) {
+            frame.command_buffer.wait_until_completed();
+
+            if frame.drawable.presented_time() > 0.0 {
+                continue;
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero()
+                || (frame.presented.recv_timeout(remaining).is_err()
+                    && frame.drawable.presented_time() <= 0.0)
+            {
+                log::warn!("timed out waiting for the previous Metal frame to present");
+            }
+        }
     }
 
     /// Recreates the path intermediate textures at exactly `size` device
@@ -505,6 +551,10 @@ impl MetalRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) {
+        self.pending_presentations.retain(|frame| {
+            frame.drawable.presented_time() <= 0.0
+                && matches!(frame.presented.try_recv(), Err(mpsc::TryRecvError::Empty))
+        });
         let layer = match &self.layer {
             Some(l) => l.clone(),
             None => {
@@ -536,15 +586,27 @@ impl MetalRenderer {
                 return;
             }
         };
+        let tracked_drawable = drawable.to_owned();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let handler = ConcreteBlock::new(move |_: &metal::DrawableRef| {
+            let _ = sender.try_send(());
+        });
+        tracked_drawable.add_presented_handler(&handler);
 
         if self.presents_with_transaction {
             command_buffer.commit();
             command_buffer.wait_until_scheduled();
-            drawable.present();
+            tracked_drawable.present();
         } else {
-            command_buffer.present_drawable(drawable);
+            command_buffer.present_drawable(&tracked_drawable);
             command_buffer.commit();
         }
+
+        self.pending_presentations.push(PendingPresentation {
+            command_buffer: command_buffer.to_owned(),
+            drawable: tracked_drawable,
+            presented: receiver,
+        });
     }
 
     fn render_frame(

@@ -1419,6 +1419,11 @@ fn resize_and_present_frame(window_state: Arc<Mutex<MacWindowState>>, size: Size
         if state.content_size() == size {
             return;
         }
+        // A display-link frame from before this resize may still be in flight.
+        // Core Animation would present it after the window changes size, which
+        // is the frame that appears stretched or collapsed. Drain the previous
+        // presentation before touching the native/layer bounds.
+        state.renderer.wait_for_presentation();
         state.renderer.set_presents_with_transaction(true);
         state.stop_display_link();
         (state.native_window, state.request_frame_callback.take())
