@@ -7,3 +7,4 @@
 0007-gpui-path-builder-stroke-rounded.patch
 0008-gpui-cold-path-noop-shim.patch
 0009-macos-atomic-top-anchored-resize.patch
+0010-apple-layer-top-left-gravity.patch

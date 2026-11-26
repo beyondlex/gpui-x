@@ -1,6 +1,6 @@
 [package]
 name = "gpui-x-platform"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 description = "Platform facade aggregating the gpui-x backends behind one entry point"
 license = "Apache-2.0"

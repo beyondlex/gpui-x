@@ -1,0 +1,41 @@
+# fix(gpui_apple): 固定 CAMetalLayer 左上角 contents gravity
+#
+# 程序化 resize 与首帧呈现之间若仍有时间差，默认 resize gravity 会把旧
+# drawable 缩放成新 bounds，表现为内容拉伸或坍缩。锚定左上角后，旧内容
+# 只会被裁切，下一帧再替换为匹配的新 drawable。
+#
+# 基线: gpui-x 0.1.0（contents gravity 修复前的 Apple backend）
+---
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index 7b14e78..ae83e45 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -2,8 +2,8 @@ use crate::metal_atlas::MetalAtlas;
+ use anyhow::{Context as _, Result};
+ use block::ConcreteBlock;
+ use cocoa::{
+-    base::{NO, YES},
+-    foundation::{NSSize, NSUInteger},
++    base::{NO, YES, nil},
++    foundation::{NSSize, NSString, NSUInteger},
+     quartzcore::AutoresizingMask,
+ };
+ use gpui::{
+@@ -166,6 +166,17 @@ impl MetalRenderer {
+         // https://developer.apple.com/documentation/metal/managing-your-game-window-for-metal-in-macos
+         layer.set_opaque(!transparent);
+         layer.set_maximum_drawable_count(3);
++        // CAMetalLayer keeps the previous drawable until the next command
++        // buffer presents. Its default `resize` gravity scales that stale
++        // texture when the layer bounds change, which makes a window resize
++        // show a stretched frame. Keep contents anchored at the top-left so
++        // a late drawable is clipped instead of scaled; the next frame then
++        // replaces it at the new drawable size.
++        unsafe {
++            let contents_gravity = NSString::alloc(nil).init_str("topLeft");
++            let _: () = msg_send![&*layer, setContentsGravity: contents_gravity];
++            let _: () = msg_send![contents_gravity, release];
++        }
+         // Allow texture reading for visual tests (captures screenshots without ScreenCaptureKit)
+         #[cfg(any(test, feature = "test-support"))]
+         layer.set_framebuffer_only(false);

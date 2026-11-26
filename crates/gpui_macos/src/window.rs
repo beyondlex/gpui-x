@@ -1436,6 +1436,10 @@ fn resize_and_present_frame(window_state: Arc<Mutex<MacWindowState>>, size: Size
         NSWindow::setFrameTopLeftPoint_(window, top_left);
     }
     if let Some(callback) = request_frame.as_mut() {
+        // A required presentation bypasses GPUI's inactive-window and thermal
+        // throttles. The resize must not defer its forced draw past transaction
+        // commit: `draw` presents inside this transaction, so the first
+        // committed frame at the new bounds already has matching contents.
         callback(RequestFrameOptions {
             require_presentation: true,
             force_render: true,
