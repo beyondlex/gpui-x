@@ -1,0 +1,54 @@
+# perf(metal): path 中间渲染 MSAA 8x（设备不支持时回退 4x）
+#
+# 目标采样数 8x（Apple Silicon 普遍支持，曲线边缘更细腻），
+# 用 device.supports_texture_sample_count 探测，不支持回退 4x。
+#
+# 基线: zed-industries/zed @ 916fc2b8cb3a815cbef4a3b40e13081be72036b6（gpui-x 快照提交 a8d519d 的抽离基线）
+# 来源: 烘焙于快照 a8d519d；metal_renderer.rs 第 1–4 个 hunk
+---
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index 2350718..c108299 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -36,6 +36,10 @@ const SHADERS_METALLIB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/shader
+ const SHADERS_SOURCE_FILE: &str = include_str!(concat!(env!("OUT_DIR"), "/stitched_shaders.metal"));
+ // Use 4x MSAA, all devices support it.
+ // https://developer.apple.com/documentation/metal/mtldevice/1433355-supportstexturesamplecount
++/// Path 中间渲染的目标 MSAA 采样数：8x 在 Apple Silicon 上普遍可用，
++/// 曲线边缘（泳道/缎带/路径图标）抗锯齿比 4x 更细；设备不支持时回退 4x。
++const PATH_TARGET_SAMPLE_COUNT: u32 = 8;
++/// Metal 保底的 MSAA 采样数（所有 GPU 都支持 4x）。
+ const PATH_SAMPLE_COUNT: u32 = 4;
+ /// Metal requires the offset a buffer is bound at to be 256-byte aligned.
+ const INSTANCE_BUFFER_ALIGNMENT: usize = 256;
+@@ -258,6 +262,12 @@ impl MetalRenderer {
+             },
+         );
+ 
++        let path_sample_count = if device.supports_texture_sample_count(PATH_TARGET_SAMPLE_COUNT as u64)
++        {
++            PATH_TARGET_SAMPLE_COUNT
++        } else {
++            PATH_SAMPLE_COUNT
++        };
+         let paths_rasterization_pipeline_state = build_path_rasterization_pipeline_state(
+             &device,
+             &library,
+@@ -265,7 +275,7 @@ impl MetalRenderer {
+             "path_rasterization_vertex",
+             "path_rasterization_fragment",
+             MTLPixelFormat::BGRA8Unorm,
+-            PATH_SAMPLE_COUNT,
++            path_sample_count,
+         );
+         let path_sprites_pipeline_state = build_path_sprite_pipeline_state(
+             &device,
+@@ -351,7 +361,7 @@ impl MetalRenderer {
+             core_video_texture_cache,
+             path_intermediate_texture: None,
+             path_intermediate_msaa_texture: None,
+-            path_sample_count: PATH_SAMPLE_COUNT,
++            path_sample_count,
+             #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
+             headless_render_target: None,
+         }

@@ -1,0 +1,93 @@
+# fix(gpui_macos): 程序化 resize 原子重绘并保持左上角
+#
+# `setContentSize_` 会立即改变 CAMetalLayer 的 bounds/drawable size。若等下一轮
+# display link 再绘制，AppKit 可能先用旧 drawable 合成新 bounds，造成一帧拉伸或
+# 坍缩。这里把尺寸变化、左上角复位和强制绘制放进同一个 Core Animation transaction。
+#
+# 基线: gpui-x 0.1.0（该修复前的 macOS backend）
+---
+diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
+index 9a6c503..d8aaab1 100644
+--- a/crates/gpui_macos/src/window.rs
++++ b/crates/gpui_macos/src/window.rs
+@@ -1400,6 +1400,55 @@ impl Drop for MacWindow {
+     }
+ }
+ 
++/// Resizes the native content view and redraws before Core Animation commits.
++///
++/// `setContentSize_` updates both the NSView frame and the CAMetalLayer drawable
++/// size. If the next GPUI frame is left to a later display-link turn, AppKit can
++/// commit the new layer bounds together with the previous, differently-sized
++/// drawable. Core Animation then stretches that old texture into the new bounds
++/// for one frame.
++///
++/// Keep the size change and the forced redraw in one transaction. Presentation
++/// waits for the fresh drawable, so the first committed frame at the new bounds
++/// already has matching contents. Programmatic resizes also keep the window's
++/// top-left corner fixed; without that, a height change moves the content away
++/// from the anchor the caller laid it out against.
++fn resize_and_present_frame(window_state: Arc<Mutex<MacWindowState>>, size: Size<Pixels>) {
++    let (window, mut request_frame) = {
++        let mut state = window_state.lock();
++        if state.content_size() == size {
++            return;
++        }
++        state.renderer.set_presents_with_transaction(true);
++        state.stop_display_link();
++        (state.native_window, state.request_frame_callback.take())
++    };
++
++    cocoa::quartzcore::transaction::begin();
++    cocoa::quartzcore::transaction::set_disable_actions(true);
++    unsafe {
++        let frame = NSWindow::frame(window);
++        let top_left = NSPoint::new(frame.origin.x, frame.origin.y + frame.size.height);
++        window.setContentSize_(NSSize {
++            width: size.width.as_f32() as f64,
++            height: size.height.as_f32() as f64,
++        });
++        NSWindow::setFrameTopLeftPoint_(window, top_left);
++    }
++    if let Some(callback) = request_frame.as_mut() {
++        callback(RequestFrameOptions {
++            require_presentation: true,
++            force_render: true,
++        });
++    }
++    cocoa::quartzcore::transaction::commit();
++
++    let mut state = window_state.lock();
++    state.request_frame_callback = request_frame;
++    state.renderer.set_presents_with_transaction(false);
++    state.start_display_link();
++}
++
+ /// Calls `f` if the window is not closed.
+ ///
+ /// This should be used when spawning foreground tasks interacting with the
+@@ -1429,17 +1478,14 @@ impl PlatformWindow for MacWindow {
+     }
+ 
+     fn resize(&mut self, size: Size<Pixels>) {
+-        let this = self.0.lock();
+-        let window = this.native_window;
+-        let closed = this.closed.clone();
+-        this.foreground_executor
++        let window_state = self.0.clone();
++        let (executor, closed) = {
++            let state = window_state.lock();
++            (state.foreground_executor.clone(), state.closed.clone())
++        };
++        executor
+             .spawn(async move {
+-                if_window_not_closed(closed, || unsafe {
+-                    window.setContentSize_(NSSize {
+-                        width: size.width.as_f32() as f64,
+-                        height: size.height.as_f32() as f64,
+-                    });
+-                })
++                if_window_not_closed(closed, || resize_and_present_frame(window_state, size))
+             })
+             .detach();
+     }

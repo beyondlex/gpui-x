@@ -1,0 +1,9 @@
+0001-gpui-paint-path-scaled-and-path-origin.patch
+0002-renderers-path-origin-sync-and-vertex-prealloc.patch
+0003-metal-merge-adjacent-path-batches.patch
+0004-metal-path-msaa-8x.patch
+0005-metal-path-pass-union-bounds-clip.patch
+0006-gpui-path-vertices-arc-sharing.patch
+0007-gpui-path-builder-stroke-rounded.patch
+0008-gpui-cold-path-noop-shim.patch
+0009-macos-atomic-top-anchored-resize.patch

@@ -1,0 +1,33 @@
+# feat(gpui): PathBuilder 新增 stroke_rounded——圆帽圆角描边构造器
+#
+# 圆帽圆角描边构造器。
+#
+# 基线: zed-industries/zed @ 916fc2b8cb3a815cbef4a3b40e13081be72036b6（gpui-x 快照提交 a8d519d 的抽离基线）
+# 来源: gpui-x 提交 7b3a4fd 原样
+---
+diff --git a/crates/gpui/src/path_builder.rs b/crates/gpui/src/path_builder.rs
+index 40a6e71..d039ac3 100644
+--- a/crates/gpui/src/path_builder.rs
++++ b/crates/gpui/src/path_builder.rs
+@@ -92,6 +92,21 @@ impl PathBuilder {
+         }
+     }
+ 
++    /// Creates a new [`PathBuilder`] to build a Stroke path with round caps
++    /// and round joins. lyon defaults to Butt/Miter; rounded strokes match
++    /// UI elements drawn with circular dots (lane curves, arrowheads).
++    pub fn stroke_rounded(width: Pixels) -> Self {
++        Self {
++            style: PathStyle::Stroke(
++                StrokeOptions::default()
++                    .with_line_width(width.0)
++                    .with_line_cap(lyon::tessellation::LineCap::Round)
++                    .with_line_join(lyon::tessellation::LineJoin::Round),
++            ),
++            ..Self::default()
++        }
++    }
++
+     /// Creates a new [`PathBuilder`] to build a Fill path.
+     pub fn fill() -> Self {
+         Self::default()

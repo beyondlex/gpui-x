@@ -1,0 +1,61 @@
+# perf(renderers): 渲染端同步 origin 平移 + 顶点缓冲预分配
+#
+# Metal / wgpu / DirectX 三个后端在把 path 顶点展开进渲染缓冲时加上 path.origin
+#（配合 0001 的零拷贝平移），并按顶点总数预分配 Vec，避免逐路径扩容。
+#
+# 基线: zed-industries/zed @ 916fc2b8cb3a815cbef4a3b40e13081be72036b6（gpui-x 快照提交 a8d519d 的抽离基线）
+# 来源: 烘焙于快照 a8d519d；metal_renderer.rs 第 7 个 hunk + wgpu/directx 全部
+---
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index 2350718..c108299 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -762,10 +796,10 @@ impl MetalRenderer {
+             .as_ref()
+             .context("missing path intermediate texture")?;
+ 
+-        let mut vertices = Vec::new();
++        let mut vertices = Vec::with_capacity(paths.iter().map(|path| path.vertices.len()).sum());
+         for path in paths {
+             vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
+-                xy_position: v.xy_position,
++                xy_position: v.xy_position + path.origin,
+                 st_position: v.st_position,
+                 color: path.color,
+                 bounds: path.bounds.intersect(&path.content_mask.bounds),
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index ecb19e8..a7d68b0 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -1705,11 +1705,11 @@ impl WgpuRenderer {
+         paths: &[Path<ScaledPixels>],
+         instance_offset: &mut u64,
+     ) -> Result<bool> {
+-        let mut vertices = Vec::new();
++        let mut vertices = Vec::with_capacity(paths.iter().map(|path| path.vertices.len()).sum());
+         for path in paths {
+             let bounds = path.clipped_bounds();
+             vertices.extend(path.vertices.iter().map(|v| PathRasterizationVertex {
+-                xy_position: v.xy_position,
++                xy_position: v.xy_position + path.origin,
+                 st_position: v.st_position,
+                 color: path.color,
+                 bounds,
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index 3f53556..8c990c6 100644
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -633,11 +633,11 @@ impl DirectXRenderer {
+         }
+ 
+         // Collect all vertices and sprites for a single draw call
+-        let mut vertices = Vec::new();
++        let mut vertices = Vec::with_capacity(paths.iter().map(|path| path.vertices.len()).sum());
+ 
+         for path in paths {
+             vertices.extend(path.vertices.iter().map(|v| PathRasterizationSprite {
+-                xy_position: v.xy_position,
++                xy_position: v.xy_position + path.origin,
+                 st_position: v.st_position,
+                 color: path.color,
+                 bounds: path.clipped_bounds(),

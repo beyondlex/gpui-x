@@ -46,9 +46,9 @@ derive_refineable = { path = "crates/refineable/derive_refineable" , package = "
 gpui = { path = "crates/gpui", default-features = false , package = "gpui-x", version = "0.2.2"}
 gpui_apple = { path = "crates/gpui_apple" , package = "gpui-x-apple", version = "0.1.0"}
 gpui_linux = { path = "crates/gpui_linux", default-features = false , package = "gpui-x-linux", version = "0.1.0"}
-gpui_macos = { path = "crates/gpui_macos", default-features = false , package = "gpui-x-macos", version = "0.1.0"}
+gpui_macos = { path = "crates/gpui_macos", default-features = false , package = "gpui-x-macos", version = "0.1.1"}
 gpui_macros = { path = "crates/gpui_macros" , package = "gpui-x-macros", version = "0.1.0"}
-gpui_platform = { path = "crates/gpui_platform", default-features = false , package = "gpui-x-platform", version = "0.1.0"}
+gpui_platform = { path = "crates/gpui_platform", default-features = false , package = "gpui-x-platform", version = "0.1.1"}
 gpui_shared_string = { path = "crates/gpui_shared_string" , package = "gpui-x-shared-string", version = "0.1.0"}
 gpui_util = { path = "crates/gpui_util" , package = "gpui-x-gpui-util", version = "0.1.0"}
 gpui_web = { path = "crates/gpui_web" , package = "gpui-x-web", version = "0.1.0"}

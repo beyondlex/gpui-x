@@ -1,0 +1,122 @@
+# perf(metal): 相邻 path batch 合并为单次中间渲染 pass
+#
+# 场景里相邻的 Paths batch（中间没有其他图元）共享一次中间渲染 pass：
+# 预乘 alpha（premultiplied alpha，颜色已乘透明度的存储方式）的合成满足结合律，
+# 所以多次全窗 clear 可以合并成一次。PrimitiveBatch 补 derive(Clone)。
+#
+# 基线: zed-industries/zed @ 916fc2b8cb3a815cbef4a3b40e13081be72036b6（gpui-x 快照提交 a8d519d 的抽离基线）
+# 来源: 烘焙于快照 a8d519d；metal_renderer.rs 第 5、6 个 hunk + scene.rs 第 1 个 hunk
+---
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index ea0f5d7..7da2158 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -465,7 +465,7 @@ impl<'a> Iterator for BatchIterator<'a> {
+     }
+ }
+ 
+-#[derive(Debug)]
++#[derive(Clone, Debug)]
+ #[cfg_attr(
+     all(
+         any(target_os = "linux", target_os = "freebsd"),
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index 2350718..c108299 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -674,18 +684,33 @@ impl MetalRenderer {
+             Some(metal::MTLClearColor::new(0., 0., 0., alpha)),
+         );
+ 
+-        for batch in scene.batches() {
+-            match batch {
++        let batches: Vec<PrimitiveBatch> = scene.batches().collect();
++        let mut batch_index = 0;
++        while batch_index < batches.len() {
++            match batches[batch_index].clone() {
+                 PrimitiveBatch::Shadows(range) => {
+-                    self.draw_shadows(range, instance_bindings, viewport_size, command_encoder)
++                    self.draw_shadows(range, instance_bindings, viewport_size, command_encoder);
++                    batch_index += 1;
+                 }
+                 PrimitiveBatch::Quads(range) => {
+-                    self.draw_quads(range, instance_bindings, viewport_size, command_encoder)
++                    self.draw_quads(range, instance_bindings, viewport_size, command_encoder);
++                    batch_index += 1;
+                 }
+                 PrimitiveBatch::Paths(range) => {
+-                    let paths = &scene.paths[range];
++                    // Adjacent path batches have no other primitives between them,
++                    // and premultiplied-over compositing is associative, so they can
++                    // share one intermediate pass: one full-viewport clear instead of
++                    // one per batch.
+                     command_encoder.end_encoding();
+ 
++                    let mut paths_end = range.end;
++                    let mut next_index = batch_index + 1;
++                    while let Some(PrimitiveBatch::Paths(next_range)) = batches.get(next_index) {
++                        paths_end = next_range.end;
++                        next_index += 1;
++                    }
++
++                    let paths = &scene.paths[range.start..paths_end];
+                     let did_draw = self.draw_paths_to_intermediate(
+                         paths,
+                         writer,
+@@ -711,33 +736,42 @@ impl MetalRenderer {
+                             return Err(error);
+                         }
+                     }
++                    batch_index = next_index;
+                 }
+                 PrimitiveBatch::Underlines(range) => {
+-                    self.draw_underlines(range, instance_bindings, viewport_size, command_encoder)
++                    self.draw_underlines(range, instance_bindings, viewport_size, command_encoder);
++                    batch_index += 1;
+                 }
+-                PrimitiveBatch::MonochromeSprites { texture_id, range } => self
+-                    .draw_monochrome_sprites(
++                PrimitiveBatch::MonochromeSprites { texture_id, range } => {
++                    self.draw_monochrome_sprites(
+                         texture_id,
+                         range,
+                         instance_bindings,
+                         viewport_size,
+                         command_encoder,
+-                    ),
+-                PrimitiveBatch::PolychromeSprites { texture_id, range } => self
+-                    .draw_polychrome_sprites(
++                    );
++                    batch_index += 1;
++                }
++                PrimitiveBatch::PolychromeSprites { texture_id, range } => {
++                    self.draw_polychrome_sprites(
+                         texture_id,
+                         range,
+                         instance_bindings,
+                         viewport_size,
+                         command_encoder,
+-                    ),
+-                PrimitiveBatch::Surfaces(range) => self.draw_surfaces(
+-                    &scene.surfaces[range.clone()],
+-                    range.start,
+-                    instance_bindings,
+-                    viewport_size,
+-                    command_encoder,
+-                ),
++                    );
++                    batch_index += 1;
++                }
++                PrimitiveBatch::Surfaces(range) => {
++                    self.draw_surfaces(
++                        &scene.surfaces[range.clone()],
++                        range.start,
++                        instance_bindings,
++                        viewport_size,
++                        command_encoder,
++                    );
++                    batch_index += 1;
++                }
+                 PrimitiveBatch::SubpixelSprites { .. } => unreachable!(),
+             }
+         }
